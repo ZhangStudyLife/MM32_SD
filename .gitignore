@@ -1,0 +1,56 @@
+# Keil MDK 项目：仅忽略编译产物（不忽略工程/源码）
+
+# ========== 编译产物与临时文件 ==========
+# 输出目录
+Listings/
+Objects/
+RTE/
+Output/
+build/
+DebugConfig/
+
+# 编译中间文件 & 目标文件
+*.o
+*.d
+*.dep
+*.crf
+*.lst
+*.map
+*.axf
+*.elf
+*.bin
+*.hex
+*.out
+*.lnp
+
+# 报告/日志/预处理文件
+*.build_log.htm
+*.htm
+*.html
+*.i
+*.su
+*.log
+
+# 临时/备份文件
+*.tmp
+*.bak
+*_1.*
+
+# 删除临时文件脚本
+*.bat
+
+# 文档及说明（如需保留主版本说明请手动排除）
+*.css
+documents/
+doc/
+*.txt
+
+# 库文件
+*.a
+*.lib
+
+# ========== 显式保留工程文件 ==========
+!**/*.uvprojx
+!**/*.uvoptx
+!**/*.uvguix.*
+!**/*.sct
