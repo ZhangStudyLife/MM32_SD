@@ -49,6 +49,28 @@ doc/
 *.a
 *.lib
 
+# IAR 临时/配置文件
+*.ewd
+*.ewp
+*.ewt
+*.dnx
+*.icf
+
+# JLink 配置
+JLinkSettings.ini
+
+# Keil GUI配置
+*.uvguix.*
+
+# 工程临时/备份文件
+*_1.*
+
+# 忽略VSCode配置文件夹
+.vscode/
+
+# 显式保留MDK项目文件（支持多级目录）
+!32_SD/mdk/**/*.uvprojx
+
 # ========== 显式保留工程文件 ==========
 !**/*.uvprojx
 !**/*.uvoptx
