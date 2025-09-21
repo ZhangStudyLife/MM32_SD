@@ -409,6 +409,28 @@
         </Group>
         <Group>
           <GroupName>code</GroupName>
+          <Files>
+            <File>
+              <FileName>sdcard_manager.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\code\sd\sdcard_manager.c</FilePath>
+            </File>
+            <File>
+              <FileName>sdcard_manager.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\code\sd\sdcard_manager.h</FilePath>
+            </File>
+            <File>
+              <FileName>sdcard_record.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\code\sd\sdcard_record.c</FilePath>
+            </File>
+            <File>
+              <FileName>sdcard_record.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\code\sd\sdcard_record.h</FilePath>
+            </File>
+          </Files>
         </Group>
         <Group>
           <GroupName>doc</GroupName>
@@ -1234,5 +1256,14 @@
     <components/>
     <files/>
   </RTE>
+
+  <LayerInfo>
+    <Layers>
+      <Layer>
+        <LayName>mm32f327x_g8p</LayName>
+        <LayPrjMark>1</LayPrjMark>
+      </Layer>
+    </Layers>
+  </LayerInfo>
 
 </Project>
