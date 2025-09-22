@@ -311,6 +311,12 @@ void display(void)
 		if (curr_key1 && !prev_key1)
 		{
 			char path[20];
+			// 若有新帧完成，先更新一次快照，避免保存过程中的断层
+			if (!recording && mt9v03x_finish_flag)
+			{
+				memcpy(image_copy, mt9v03x_image, FRAME_BYTES);
+				mt9v03x_finish_flag = 0;
+			}
 			// 生成文件名，如 "1:/cmprs/1.bmp"
 			sprintf(path, "1:/cmprs/%d.bmp", img_index);
 			if (save_bmp(path) == FR_OK)
@@ -335,6 +341,8 @@ void display(void)
 				{
 					recording = 1;
 					ips200_show_string(30, 180 + offset, "REC ON ");
+					// 录制期间关闭屏幕图像显示：清除上一帧图像
+					ips200_clear();
 				}
 				else
 				{
@@ -379,19 +387,23 @@ int main(void)
 
 	while (1)
 	{
-		// 录制模式：直接写入原始灰度帧到 .dat，屏蔽屏幕显示以提升吞吐
+		// 录制模式：为防止DMA覆盖导致断层，先快照到稳定缓冲再写入
 		if (recording && mt9v03x_finish_flag)
 		{
+			// 快照当前帧
+			memcpy(image_copy, mt9v03x_image, FRAME_BYTES);
+			mt9v03x_finish_flag = 0;
+			// 再写入SD（使用明确的首地址指针）
 			UINT bw = 0;
-			FRESULT fr = f_write(&recFile, mt9v03x_image, FRAME_BYTES, &bw);
+			FRESULT fr = f_write(&recFile, &image_copy[0][0], FRAME_BYTES, &bw);
 			if (fr || bw != FRAME_BYTES)
 			{
 				show_fr("WRITE", fr);
 			}
-			mt9v03x_finish_flag = 0;
-			continue;
+			// 不再 continue，确保本轮循环仍会调用 display() 扫描按键
 		}
-		if (mt9v03x_finish_flag)
+		// 非录制状态下才在屏幕显示图像
+		if (!recording && mt9v03x_finish_flag)
 		{
 			memcpy(image_copy, mt9v03x_image, MT9V03X_H * MT9V03X_W);
 			ips200_show_gray_image(0, 0, (const uint8 *)image_copy, MT9V03X_W, MT9V03X_H, MT9V03X_W, MT9V03X_H, 0);
