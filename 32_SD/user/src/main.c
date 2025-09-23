@@ -35,7 +35,7 @@
 
 #include "zf_common_headfile.h"
 #include "ff.h"
-#include "../../code/sd/sdcard_manager.h"
+#include "../../code/sd_manager/inc/sd_manager.h"
 // SD 卡通信模式显示
 #ifdef SDIO
 #define SD_MODE_STR "SDIO"
@@ -43,155 +43,14 @@
 #define SD_MODE_STR "SPI "
 #endif
 
-#pragma pack(1)
-typedef struct
-{
-	uint16_t bfType;
-	uint32_t bfSize;
-	uint16_t bfReserved1;
-	uint16_t bfReserved2;
-	uint32_t bfOffBits;
-} BITMAPFILEHEADER;
-
-typedef struct
-{
-	uint32_t biSize;
-	int32_t biWidth;
-	int32_t biHeight;
-	uint16_t biPlanes;
-	uint16_t biBitCount;
-	uint32_t biCompression;
-	uint32_t biSizeImage;
-	int32_t biXPelsPerMeter;
-	int32_t biYPelsPerMeter;
-	uint32_t biClrUsed;
-	uint32_t biClrImportant;
-} BITMAPINFOHEADER;
-
-typedef struct
-{
-	uint8_t rgbBlue;
-	uint8_t rgbGreen;
-	uint8_t rgbRed;
-	uint8_t rgbReserved;
-} RGBQUAD;
-#pragma pack()
-
-// FatFs 文件系统对象
-static FATFS fs;
-static FIL recFile;			   // 录制用文件
-static uint8_t recording = 0;  // 0=空闲 1=录制中
-static uint16_t rec_index = 1; // 第几次录像
+// 应用程序变量
 // 视频帧计数
 static uint16_t video_index = 1;
-// 上次按键状态
-static uint8_t prev_key1 = 0;
-// BMP 文件计数索引
-static uint16_t img_index = 1;
 
 // 帧尺寸（总钻风 MT9V03X）与原始帧大小
 #define FRAME_W (MT9V03X_W)				// 例如 188
 #define FRAME_H (MT9V03X_H)				// 例如 120
 #define FRAME_BYTES (FRAME_W * FRAME_H) // 22560 字节/帧（8bit 灰度）
-
-// 打印 FatFs 错误码到屏幕，便于定位 REC_ERR
-static void show_fr(const char *tag, FRESULT fr)
-{
-	char buf[32];
-	sprintf(buf, "%s:%02d", tag, (int)fr);
-	ips200_show_string(0, 48, buf);
-}
-
-// 可靠创建目录：忽略已存在，其他错误显示
-static void safe_mkdir(const char *path)
-{
-	FRESULT fr = f_mkdir(path);
-	if (fr && fr != FR_EXIST)
-		show_fr("MKDIR", fr);
-}
-
-// 可靠打开录制文件：优先 1:/cmprs，其次 /cmprs（当 chdrive 到 1: 时可用）
-static FRESULT open_record_file(FIL *f, uint16_t index)
-{
-	char path[40];
-	// 确保目录存在（双路径）：避免因目录缺失导致打开失败
-	safe_mkdir("1:/cmprs");
-	safe_mkdir("/cmprs");
-	sprintf(path, "1:/cmprs/%d.dat", index);
-	FRESULT fr = f_open(f, path, FA_CREATE_ALWAYS | FA_WRITE);
-	if (fr == FR_OK)
-		return fr;
-	sprintf(path, "/cmprs/%d.dat", index);
-	return f_open(f, path, FA_CREATE_ALWAYS | FA_WRITE);
-}
-
-/**
- * @brief 将灰度图像保存为 BMP 文件
- * @param path BMP 文件完整路径（如 "1:/img/1.bmp"）
- * @return FatFs 操作结果 FR_OK 表示成功
- */
-FRESULT save_bmp(const char *path)
-{
-	FIL file;
-	UINT bw;
-	BITMAPFILEHEADER fh;
-	BITMAPINFOHEADER ih;
-	RGBQUAD palette[256];
-	uint32_t rowSize = ((MT9V03X_W + 3) / 4) * 4;
-	uint32_t imgSize = rowSize * MT9V03X_H;
-	uint32_t offsetBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + sizeof(palette);
-
-	// 文件头
-	fh.bfType = 0x4D42;
-	fh.bfSize = offsetBits + imgSize;
-	fh.bfReserved1 = 0;
-	fh.bfReserved2 = 0;
-	fh.bfOffBits = offsetBits;
-
-	// 信息头
-	ih.biSize = sizeof(BITMAPINFOHEADER);
-	ih.biWidth = MT9V03X_W;
-	ih.biHeight = MT9V03X_H;
-	ih.biPlanes = 1;
-	ih.biBitCount = 8;
-	ih.biCompression = 0;
-	ih.biSizeImage = imgSize;
-	ih.biXPelsPerMeter = 0;
-	ih.biYPelsPerMeter = 0;
-	ih.biClrUsed = 256;
-	ih.biClrImportant = 0;
-
-	// 调色板（灰度）
-	for (int i = 0; i < 256; i++)
-	{
-		palette[i].rgbBlue = i;
-		palette[i].rgbGreen = i;
-		palette[i].rgbRed = i;
-		palette[i].rgbReserved = 0;
-	}
-
-	// 打开文件
-	if (f_open(&file, path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK)
-	{
-		return FR_DISK_ERR;
-	}
-	// 写入头部
-	f_write(&file, &fh, sizeof(fh), &bw);
-	f_write(&file, &ih, sizeof(ih), &bw);
-	// 写入调色板
-	f_write(&file, palette, sizeof(palette), &bw);
-
-	// 写入像素数据：自底向上
-	for (int y = MT9V03X_H - 1; y >= 0; y--)
-	{
-		f_write(&file, image_copy[y], MT9V03X_W, &bw);
-		// 行对齐填充
-		uint8_t pad[4] = {0};
-		f_write(&file, pad, rowSize - MT9V03X_W, &bw);
-	}
-	f_close(&file);
-	return FR_OK;
-}
 
 // 打开新的工程或者工程移动了位置务必执行以下操作
 // 第一步 关闭上面所有打开的文件
@@ -280,29 +139,35 @@ void all_init(void)
 
 	pit_ms_init(TIM2_PIT, 1);
 	pit_ms_init(TIM5_PIT, 100);
-	interrupt_set_priority(TIM2_IRQn, 0);
-	interrupt_set_priority(TIM5_IRQn, 1);
-	// 挂载 SD 卡文件系统，驱动号为 1（失败则显示错误码并重试）
-	// 挂载与必要目录准备（统一到 sdcard_manager 内处理）
-	sdcard_init_and_mount();
-	// 目录创建已移至 sdcard_manager，仅保留挂载
+	interrupt_set_priority(TIM2_IRQn, 1); // 降低定时器优先级
+	interrupt_set_priority(TIM5_IRQn, 2);
+	interrupt_set_priority(MT9V03X_DMA_IRQN, 0); // 提高摄像头DMA优先级
 
-	// 挂载完成后显示 SD 模式
-	ips200_show_string(0, 32, SD_MODE_STR);
+	// 初始化SD卡管理器
+	sd_result_t sd_result = sd_manager_init();
+	if (sd_result != SD_OK)
+	{
+		ips200_show_string(0, 32, "SD Init Failed");
+		ips200_show_string(0, 48, sd_manager_get_error_string(sd_result));
+	}
+	else
+	{
+		ips200_show_string(0, 32, SD_MODE_STR);
+	}
 }
 
 void display(void)
 {
 	//	ips200_show_chinese(0, 100+offset, 16, test_chinese1[0], 14, RGB565_RED);
 	//	ips200_show_chinese(0, 116+offset, 16, test_chinese2[0], 14, RGB565_RED);
-	ips200_show_chinese(0, 132 + offset, 16, test_chinese3[0], 7, RGB565_RED);
-	ips200_show_chinese(0, 148 + offset, 16, test_chinese4[0], 7, RGB565_RED);
-	ips200_show_int(115, 132 + offset, encoder1, 3);
-	ips200_show_int(115, 148 + offset, encoder2, 3);
-	ips200_show_string(0, 164 + offset, "E2:");
-	ips200_show_string(0, 180 + offset, "E3:");
-	ips200_show_string(0, 196 + offset, "E4:");
-	ips200_show_string(0, 212 + offset, "E5:");
+	ips200_show_chinese(0, 150 + offset, 16, test_chinese3[0], 7, RGB565_RED);
+	ips200_show_chinese(0, 166 + offset, 16, test_chinese4[0], 7, RGB565_RED);
+	ips200_show_int(115, 150 + offset, encoder1, 3);
+	ips200_show_int(115, 166 + offset, encoder2, 3);
+	ips200_show_string(0, 182 + offset, "E2:");
+	ips200_show_string(0, 198 + offset, "E3:");
+	ips200_show_string(0, 214 + offset, "E4:");
+	ips200_show_string(0, 230 + offset, "E5:");
 
 	// KEY1 边沿检测并保存 BMP
 	{
@@ -310,55 +175,53 @@ void display(void)
 		uint8_t curr_key1 = !gpio_get_level(KEY1);
 		if (curr_key1 && !prev_key1)
 		{
-			char path[20];
 			// 若有新帧完成，先更新一次快照，避免保存过程中的断层
-			if (!recording && mt9v03x_finish_flag)
+			if (!sd_manager_is_recording() && mt9v03x_finish_flag)
 			{
 				memcpy(image_copy, mt9v03x_image, FRAME_BYTES);
 				mt9v03x_finish_flag = 0;
 			}
-			// 生成文件名，如 "1:/cmprs/1.bmp"
-			sprintf(path, "1:/cmprs/%d.bmp", img_index);
-			if (save_bmp(path) == FR_OK)
-				ips200_show_string(30, 164 + offset, "Save OK");
+
+			// 使用SD管理器保存BMP文件
+			sd_result_t result = sd_manager_save_bmp((const uint8_t *)image_copy, MT9V03X_W, MT9V03X_H);
+			if (result == SD_OK)
+				ips200_show_string(30, 182 + offset, "Save OK");
 			else
-				ips200_show_string(30, 164 + offset, "Save Err");
-			img_index++;
+				ips200_show_string(30, 182 + offset, "Save Err");
 		}
 		prev_key1 = curr_key1;
 	}
-	// KEY2 录制边沿检测：开始/停止录制原始数据（raw .dat）
+	// KEY2 录制边沿检测：一键开始/停止录像
 	{
 		static uint8_t prev_key2 = 0;
 		uint8_t curr_key2 = !gpio_get_level(KEY2);
 		if (curr_key2 && !prev_key2)
 		{
-			if (!recording)
+			if (!sd_manager_is_recording())
 			{
-				// 开始录制：按索引生成文件名并打开
-				FRESULT fr = open_record_file(&recFile, rec_index);
-				if (fr == FR_OK)
+				// 开始录像 - 获取当前图像并开始录制
+				memcpy(image_copy, mt9v03x_image, FRAME_BYTES);
+				sd_result_t result = sd_manager_start_video_recording((const uint8_t *)image_copy, MT9V03X_W, MT9V03X_H);
+				if (result == SD_OK)
 				{
-					recording = 1;
-					ips200_show_string(30, 180 + offset, "REC ON ");
+					ips200_show_string(30, 198 + offset, "REC ON ");
 					// 录制期间关闭屏幕图像显示：清除上一帧图像
 					ips200_clear();
 				}
 				else
 				{
-					show_fr("OPEN", fr);
-					ips200_show_string(30, 180 + offset, "REC ERR");
+					ips200_show_string(30, 198 + offset, "REC ERR");
 				}
 			}
 			else
 			{
-				// 停止录制
-				FRESULT fr = f_close(&recFile);
-				if (fr)
-					show_fr("CLOSE", fr);
-				recording = 0;
-				rec_index++;
-				ips200_show_string(30, 180 + offset, "REC OFF");
+				// 停止录像
+				sd_result_t result = sd_manager_stop_video_recording();
+				if (result != SD_OK)
+				{
+					ips200_show_string(0, 48, sd_manager_get_error_string(result));
+				}
+				ips200_show_string(30, 198 + offset, "REC OFF");
 			}
 		}
 		prev_key2 = curr_key2;
@@ -367,18 +230,18 @@ void display(void)
 	{
 		key3_flag = 1;
 		key3_count = 0;
-		ips200_show_string(30, 196 + offset, "OK");
+		ips200_show_string(30, 214 + offset, "OK");
 	}
 	else if (!key3_flag)
-		ips200_show_string(30, 196 + offset, "  ");
+		ips200_show_string(30, 214 + offset, "  ");
 	if (!gpio_get_level(KEY4))
 	{
 		key4_flag = 1;
 		key4_count = 0;
-		ips200_show_string(30, 212 + offset, "OK");
+		ips200_show_string(30, 230 + offset, "OK");
 	}
 	else if (!key4_flag)
-		ips200_show_string(30, 212 + offset, "  ");
+		ips200_show_string(30, 230 + offset, "  ");
 }
 
 int main(void)
@@ -387,26 +250,23 @@ int main(void)
 
 	while (1)
 	{
-		// 录制模式：为防止DMA覆盖导致断层，先快照到稳定缓冲再写入
-		if (recording && mt9v03x_finish_flag)
+		// 检查新帧
+		if (mt9v03x_finish_flag)
 		{
-			// 快照当前帧
-			memcpy(image_copy, mt9v03x_image, FRAME_BYTES);
-			mt9v03x_finish_flag = 0;
-			// 再写入SD（使用明确的首地址指针）
-			UINT bw = 0;
-			FRESULT fr = f_write(&recFile, &image_copy[0][0], FRAME_BYTES, &bw);
-			if (fr || bw != FRAME_BYTES)
+			if (sd_manager_is_recording())
 			{
-				show_fr("WRITE", fr);
+				// 录像模式：直接写入当前帧
+				sd_manager_record_frame((const uint8_t *)mt9v03x_image);
+				// 录制时不显示图像，减少CPU负载
 			}
-			// 不再 continue，确保本轮循环仍会调用 display() 扫描按键
-		}
-		// 非录制状态下才在屏幕显示图像
-		if (!recording && mt9v03x_finish_flag)
-		{
-			memcpy(image_copy, mt9v03x_image, MT9V03X_H * MT9V03X_W);
-			ips200_show_gray_image(0, 0, (const uint8 *)image_copy, MT9V03X_W, MT9V03X_H, MT9V03X_W, MT9V03X_H, 0);
+			else
+			{
+				// 非录制时才显示图像和拷贝数据
+				memcpy(image_copy, mt9v03x_image, FRAME_BYTES);
+				ips200_show_gray_image(0, 20, (const uint8 *)image_copy,
+									   MT9V03X_W, MT9V03X_H, MT9V03X_W, MT9V03X_H, 0);
+			}
+
 			mt9v03x_finish_flag = 0;
 		}
 
