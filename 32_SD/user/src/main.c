@@ -101,6 +101,8 @@ uint8 key3_flag;
 uint8 key4_flag;
 uint32 count_time = 1000;
 
+uint32 count, fps_flag = 0;
+
 void all_init(void)
 {
 	clock_init(SYSTEM_CLOCK_120M); // 初始化芯片时钟 工作频率为 120MHz
@@ -164,10 +166,10 @@ void display(void)
 	ips200_show_chinese(0, 166 + offset, 16, test_chinese4[0], 7, RGB565_RED);
 	ips200_show_int(115, 150 + offset, encoder1, 3);
 	ips200_show_int(115, 166 + offset, encoder2, 3);
-	ips200_show_string(0, 182 + offset, "E2:");
-	ips200_show_string(0, 198 + offset, "E3:");
-	ips200_show_string(0, 214 + offset, "E4:");
-	ips200_show_string(0, 230 + offset, "E5:");
+	ips200_show_string(0, 182 + offset, "K1:Save BMP");
+	ips200_show_string(0, 198 + offset, "K2:Record");
+	ips200_show_string(0, 214 + offset, "K3:FPS Start");
+	ips200_show_string(0, 230 + offset, "K4:FPS Stop");
 
 	// KEY1 边沿检测并保存 BMP
 	{
@@ -226,22 +228,24 @@ void display(void)
 		}
 		prev_key2 = curr_key2;
 	}
-	if (!gpio_get_level(KEY3))
+	// KEY3 - 开始FPS测试 (边沿检测)
 	{
-		key3_flag = 1;
-		key3_count = 0;
-		ips200_show_string(30, 214 + offset, "OK");
+		static uint8_t prev_key3 = 0;
+		uint8_t curr_key3 = !gpio_get_level(KEY3);
+		if (curr_key3 && !prev_key3)
+		{
+			if (fps_flag == 0)
+			{
+				// 开始FPS测试
+				ips200_show_string(30, 214 + offset, "FPS TEST");
+				system_delay_ms(1000); // 显示1秒提示信息
+				ips200_clear();		   // 清空屏幕，专注测试
+				fps_flag = 1;
+				count = 0;
+			}
+		}
+		prev_key3 = curr_key3;
 	}
-	else if (!key3_flag)
-		ips200_show_string(30, 214 + offset, "  ");
-	if (!gpio_get_level(KEY4))
-	{
-		key4_flag = 1;
-		key4_count = 0;
-		ips200_show_string(30, 230 + offset, "OK");
-	}
-	else if (!key4_flag)
-		ips200_show_string(30, 230 + offset, "  ");
 }
 
 int main(void)
@@ -253,24 +257,59 @@ int main(void)
 		// 检查新帧
 		if (mt9v03x_finish_flag)
 		{
+			if (fps_flag == 1)
+			{
+				count++;
+			}
+
 			if (sd_manager_is_recording())
 			{
 				// 录像模式：直接写入当前帧
 				sd_manager_record_frame((const uint8_t *)mt9v03x_image);
 				// 录制时不显示图像，减少CPU负载
 			}
+			else if (fps_flag == 1)
+			{
+				// FPS测试模式：不显示图像和UI，只计数
+				// 跳过所有显示操作以提高测试准确性
+			}
 			else
 			{
-				// 非录制时才显示图像和拷贝数据
+				// 正常模式：显示图像和UI
 				memcpy(image_copy, mt9v03x_image, FRAME_BYTES);
 				ips200_show_gray_image(0, 20, (const uint8 *)image_copy,
 									   MT9V03X_W, MT9V03X_H, MT9V03X_W, MT9V03X_H, 0);
+				// 显示帧计数
+				ips200_show_int(0, 250, count, 6);
 			}
 
 			mt9v03x_finish_flag = 0;
 		}
 
-		display();
+		// KEY4检测 - 在任何模式下都要检测，用于停止FPS测试
+		{
+			static uint8_t prev_key4 = 0;
+			uint8_t curr_key4 = !gpio_get_level(KEY4);
+			if (curr_key4 && !prev_key4)
+			{
+				if (fps_flag == 1)
+				{
+					// 停止FPS测试，恢复正常显示
+					fps_flag = 0;
+					ips200_clear();
+					ips200_show_string(0, 0, "FPS Test Complete");
+					ips200_show_string(0, 16, "Frame Count:");
+					ips200_show_int(100, 16, count, 6);
+				}
+			}
+			prev_key4 = curr_key4;
+		}
+
+		// 只在非FPS测试模式下更新UI显示
+		if (fps_flag != 1)
+		{
+			display();
+		}
 	}
 }
 // **************************** 代码区域 ****************************
